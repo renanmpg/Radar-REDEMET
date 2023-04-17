@@ -1,0 +1,182 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Apr 12 11:47:00 2023
+
+@author: Renan Godoy - USP
+
+Script developed to retrive and plot radar images from REDEMET, more information avaible at https://ajuda.decea.mil.br/base-de-conhecimento/api-redemet-produtos-radar/
+"""
+import requests
+from PIL import Image
+from io import BytesIO
+import shapefile
+import cartopy, cartopy.crs as ccrs        # Plot maps
+import numpy as np
+import datetime
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+from cartopy.io import shapereader
+from matplotlib.patches import Wedge
+
+def plot_radar_image(api_key, radarId, start_date, end_date, step, anin):
+    url = "https://api-redemet.decea.mil.br/produtos/radar/maxcappi"
+    
+    
+    current_date = start_date
+    while current_date < end_date:
+        params = {
+            "api_key": api_key,
+            "data": current_date.strftime("%Y%m%d%H"),
+            "anima": anin,
+            # "area": "sr",
+            "tipo": "maxcappi"
+        }
+    
+        current_date += step
+        # Realiza a solicitação da imagem de radar através da API
+        response = requests.get(url, params=params)
+        jdata = response.json()
+        # print(jdata)
+        # check if the request was successful
+        if response.status_code == 200 and jdata['status'] == True:
+            for jj in range(anin):
+            
+                lista = jdata['data']['radar'][jj]
+                
+                dicionario = {}
+                for i, item in enumerate(lista):
+                    dicionario[i] = item
+                    # print(item["nome"],' id: ',item["id"]) # Check ID
+                
+                parametros = next((item for item in dicionario.values() if item["id"] == radarId), None)
+                
+                response = requests.get(parametros['path'])
+                Data = parametros['data'].replace('-', '').replace(':', '')
+                Nome = parametros['nome'].replace('-', '').replace('/', '')
+                print(Nome,' ',Data)
+                
+                # open the image from the response content
+                img = Image.open(BytesIO(response.content))
+                img = img.convert('RGBA')
+        
+                # obter os pixels da imagem
+                pixels = img.load()
+                
+                # percorrer todos os pixels da imagem
+                for i in range(img.size[0]):
+                    for j in range(img.size[1]):
+                        # verificar se o pixel é preto
+                        if pixels[i, j][0] == 0 and pixels[i, j][1] == 0 and pixels[i, j][2] == 0:
+                            # se for, tornar o pixel transparente
+                            pixels[i, j] = (0, 0, 0, 0)
+    
+                # Define the figure and axis
+                fig = plt.figure(figsize=(8, 8), dpi=300)
+                ax = fig.add_subplot(111, facecolor='None', projection=ccrs.PlateCarree())
+                
+                # Define the extent of the map based on the given parameters
+                extent = [float(parametros["lon_min"]), float(parametros["lon_max"]),
+                          float(parametros["lat_min"]), float(parametros["lat_max"])]
+                
+                # Load the shapefile of country and state boundaries
+                shapefile = shapereader.Reader('D:/Users/Renan/Documents/USP/Tese Mestrado/Scripts/br_unidades_da_federacao/BR_UF_2019.shp')
+                ax.add_geometries(shapefile.geometries(), ccrs.PlateCarree(), edgecolor='k', facecolor='none', linewidth=0.5)
+                
+                # Load the image of the radar
+                im = ax.imshow((img), extent=extent, transform=ccrs.PlateCarree())
+                # define a extensão para a região sudeste do Brasil
+                lon1, lon2, lat1, lat2 = round(extent[0]), round(extent[1] - .6), round(extent[2]) + .5, round(extent[3])
+    
+                # ajusta a extensão do mapa para a região sudeste do Brasil
+                ax.set_extent([lon1, lon2, lat1, lat2], crs=ccrs.PlateCarree())
+            
+                # # Add a square around the city of interest ############################################
+                def add_square_around_city(ax, city, lat, lon,color, raio_deg):
+                    from shapely.geometry import LinearRing
+    
+                    start_lat = lat - raio_deg
+                    end_lat = lat + raio_deg
+                    start_lon = lon - raio_deg
+                    end_lon = lon + raio_deg
+                
+                    lonsz = [start_lon, end_lon, end_lon, start_lon]
+                    latsz = [start_lat, start_lat, end_lat, end_lat]
+                    ring = LinearRing(list(zip(lonsz, latsz)))
+                    ax.add_geometries([ring], ccrs.PlateCarree(), facecolor='none', edgecolor=color, linewidth=3)
+                    ax.add_geometries([ring], ccrs.PlateCarree(), facecolor='none', edgecolor='w', linewidth=.4)
+                    # ax.text(lon, lat + raio_deg + 0.02, city, ha='center', va='bottom', transform=ccrs.PlateCarree(), fontsize=12)
+    
+                # add_square_around_city(ax, 'Sorocaba', -23.48, -47.47, color='#72C108', raio_deg=0.1)
+                # add_square_around_city(ax, 'São Paulo', -23.57, -46.63,  color='#6db4d8', raio_deg=0.1)
+                add_square_around_city(ax, 'Baixada', -23.96, -46.37,  color='#72C108', raio_deg=0.2)
+    
+                ###########################################################################################
+                # Ponto do Radar
+                raio = .15  # radius in degrees
+                lat_center=float(parametros["lat_center"])
+                lon_center=float(parametros["lon_center"])
+               # Create a circle with the given radius and center coordinates
+                circle = Wedge((lon_center, lat_center), 0.05, 0, 360, fill=False, edgecolor='r', linewidth=1, zorder=1000)
+                ax.add_patch(circle)
+                ####################################
+                
+                # Set the title
+                plt.title(parametros['nome'], fontweight='bold', fontsize=10, loc='left')
+                plt.title(parametros['data'], fontsize=12, loc='right')
+            
+                # Add gridlines
+                gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                                  linewidth=1, color='gray', alpha=0.5, linestyle='--')
+                # Adiciona os rótulos dos eixos
+                gl.xlabels_top = False
+                gl.ylabels_right = False
+                gl.xlabel_style = {'size': 8}
+                gl.ylabel_style = {'size': 8}
+                
+                ax.add_feature(cartopy.feature.LAND, edgecolor='black')
+                ax.add_feature(cartopy.feature.OCEAN,alpha=.8)
+                ax.add_feature(cartopy.feature.COASTLINE, linewidth=.4)
+            
+                # Carrega a figura da legenda em PNG e adiciona como um axes na figura principal
+                legend_png = mpimg.imread('D:/Users/Renan/Documents/USP/Tese Mestrado/Scripts/Radar_Legenda.png')
+                ax_legend = fig.add_axes([0.54, -0.045, 0.35, 0.5])
+                ax_legend.imshow(legend_png)
+                ax_legend.axis('off')
+                
+                # %%%%%
+        
+                # plt.savefig('Output/'+Nome+Data+'.png', bbox_inches='tight', pad_inches=0, dpi=300)
+                plt.savefig('Output/paper_Aslip/'+Nome+Data+'.png', bbox_inches='tight', pad_inches=0, dpi=300)
+    
+                plt.show()
+            
+        else:
+            print("Erro ao fazer a requisição:", response.status_code, '   ' , jdata)
+        
+        
+radarId = 40 #40 for São Roque/SP    
+# ID - Local > | 4 - Belém/PA                    | 6 - Boa Vista/RR              | 8 - Canguçu/RS
+             # | 10 - Cruzeiro do Sul/AC         | 12 - Gama/DF                  | 14 - Jaraguari/MS
+             # | 18 - Manaus/AM                  | 20 - Macapá/AP                | 22 - Maceió/AL
+             # | 24 - Natal/RN                   | 26 - Pico do Couto/RJ         | 28 - Petrolina/PE
+             # | 30 - Porto Velho/RO             | 32 - São Francisco/MG         | 34 - Santiago/RS
+             # | 36 - São Luis/MA                | 38 - Santarém/PA              | 40 - São Roque/SP
+             # | 42 - Salvador/BA                | 44 - Santa Teresa/MG          | 46 - Tefé/AM
+             # | 48 - Três Marias/MG             | 50 - Tabatinga/AM             | 52 - São Gabriel da Cachoeira/AM
+             # | 16 - Morro da Igreja/SC         |
+             
+start_date = datetime.datetime(2023, 2, 19, 3)
+end_date = start_date + datetime.timedelta(days=1) #choose number of days to run
+
+step = datetime.timedelta(hours=5)
+anin = 15
+# Chave de acesso da API
+api_key = "SUA-KEY" # Cadastrar em: https://www.atd-1.com/cadastro-api/
+
+############# TEST ################################################
+# end_date = start_date + + datetime.timedelta(hours=1)
+# anin = 1
+###################################################################
+
+plot_radar_image(api_key, radarId, start_date, end_date, step, anin)
+
